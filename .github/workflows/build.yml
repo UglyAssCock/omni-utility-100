@@ -1,0 +1,517 @@
+name: Build Omni Utility APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+          cache: true
+
+      - name: Generate Android platform files cleanly
+        run: |
+          cp pubspec.yaml pubspec.yaml.bak
+          mkdir -p lib_backup
+          cp -r lib/* lib_backup/
+          flutter create --org com.allinone --project-name omni_utility --platforms android .
+          cp pubspec.yaml.bak pubspec.yaml
+          cp -r lib_backup/* lib/
+          rm -rf lib_backup pubspec.yaml.bak
+          rm -rf test
+
+      - name: Patch build.gradle and AndroidManifest.xml and Native Bridge
+        run: |
+          cat << 'EOF' > android/app/build.gradle
+          plugins {
+              id "com.android.application"
+              id "kotlin-android"
+              id "dev.flutter.flutter-gradle-plugin"
+          }
+
+          android {
+              namespace = "com.allinone.omni_utility"
+              compileSdk = 34
+              ndkVersion = flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              defaultConfig {
+                  applicationId = "com.allinone.omni_utility"
+                  minSdk = 23
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0.0"
+                  multiDexEnabled = true
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.debug
+                      minifyEnabled = false
+                      shrinkResources = false
+                  }
+              }
+          }
+
+          flutter {
+              source = "../.."
+          }
+
+          dependencies {
+              implementation "com.google.mlkit:text-recognition:16.0.1"
+              implementation "com.google.mlkit:barcode-scanning:17.3.0"
+          }
+          EOF
+
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.CAMERA"/>
+              <uses-permission android:name="android.permission.FLASHLIGHT"/>
+              <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+              <uses-permission android:name="android.permission.VIBRATE"/>
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+              <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT"/>
+
+              <uses-feature android:name="android.hardware.camera" android:required="false"/>
+              <uses-feature android:name="android.hardware.camera.flash" android:required="false"/>
+
+              <application
+                  android:label="Omni 100 Tools"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:requestLegacyExternalStorage="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                        android:name="io.flutter.embedding.android.NormalTheme"
+                        android:resource="@style/NormalTheme"
+                        />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+
+                  <receiver android:name=".OmniWidgetProvider" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.appwidget.provider"
+                          android:resource="@xml/omni_widget_info" />
+                  </receiver>
+
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+          mkdir -p android/app/src/main/res/xml
+          mkdir -p android/app/src/main/res/layout
+
+          cat << 'EOF' > android/app/src/main/res/layout/omni_widget_layout.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/widget_root"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:gravity="center"
+              android:padding="12dp"
+              android:background="#1E293B">
+              <TextView
+                  android:id="@+id/widget_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="Omni 100 Tools"
+                  android:textColor="#38BDF8"
+                  android:textStyle="bold"
+                  android:textSize="15sp" />
+              <TextView
+                  android:id="@+id/widget_subtitle"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="4dp"
+                  android:text="Tap to launch quick tools"
+                  android:textColor="#F8FAFC"
+                  android:textSize="12sp" />
+          </LinearLayout>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/xml/omni_widget_info.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+              android:minWidth="180dp"
+              android:minHeight="60dp"
+              android:updatePeriodMillis="86400000"
+              android:initialLayout="@layout/omni_widget_layout"
+              android:resizeMode="horizontal|vertical"
+              android:widgetCategory="home_screen" />
+          EOF
+
+          mkdir -p android/app/src/main/kotlin/com/allinone/omni_utility
+
+          cat << 'EOF' > android/app/src/main/kotlin/com/allinone/omni_utility/OmniWidgetProvider.kt
+          package com.allinone.omni_utility
+
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.appwidget.AppWidgetProvider
+          import android.content.Context
+          import android.content.Intent
+          import android.widget.RemoteViews
+
+          class OmniWidgetProvider : AppWidgetProvider() {
+              override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+                  val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                  val label = prefs.getString("flutter.widget_note", "Tap to launch quick tools") ?: "Tap to launch quick tools"
+                  for (appWidgetId in appWidgetIds) {
+                      val intent = Intent(context, MainActivity::class.java)
+                      val pendingIntent = PendingIntent.getActivity(
+                          context, 0, intent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      val views = RemoteViews(context.packageName, R.layout.omni_widget_layout)
+                      views.setTextViewText(R.id.widget_subtitle, label)
+                      views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
+                      appWidgetManager.updateAppWidget(appWidgetId, views)
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > android/app/src/main/kotlin/com/allinone/omni_utility/MainActivity.kt
+          package com.allinone.omni_utility
+
+          import android.Manifest
+          import android.app.ActivityManager
+          import android.appwidget.AppWidgetManager
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.content.IntentFilter
+          import android.content.pm.PackageManager
+          import android.content.pm.ShortcutInfo
+          import android.content.pm.ShortcutManager
+          import android.graphics.drawable.Icon
+          import android.hardware.camera2.CameraManager
+          import android.media.MediaCodec
+          import android.media.MediaExtractor
+          import android.media.MediaFormat
+          import android.media.MediaMuxer
+          import android.media.MediaRecorder
+          import android.net.Uri
+          import android.os.BatteryManager
+          import android.os.Build
+          import android.os.VibrationEffect
+          import android.os.Vibrator
+          import androidx.core.app.ActivityCompat
+          import androidx.core.content.ContextCompat
+          import com.google.mlkit.vision.barcode.BarcodeScanning
+          import com.google.mlkit.vision.common.InputImage
+          import com.google.mlkit.vision.text.TextRecognition
+          import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+          import java.io.File
+          import java.nio.ByteBuffer
+          import kotlin.math.log10
+
+          class MainActivity: FlutterActivity() {
+              private val CHANNEL = "omni_native"
+              private var mediaRecorder: MediaRecorder? = null
+
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+                      when (call.method) {
+                          "toggleFlashlight" -> {
+                              val enable = call.argument<Boolean>("enable") ?: false
+                              try {
+                                  val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                                  val cameraId = cameraManager.cameraIdList.firstOrNull()
+                                  if (cameraId != null) {
+                                      cameraManager.setTorchMode(cameraId, enable)
+                                      result.success(true)
+                                  } else {
+                                      result.error("NO_CAMERA", "No flash unit found", null)
+                                  }
+                              } catch (e: Exception) {
+                                  result.error("FLASH_ERROR", e.message, null)
+                              }
+                          }
+                          "vibrate" -> {
+                              val ms = (call.argument<Int>("ms") ?: 50).toLong()
+                              try {
+                                  val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                      v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+                                  } else {
+                                      @Suppress("DEPRECATION")
+                                      v.vibrate(ms)
+                                  }
+                                  result.success(true)
+                              } catch (e: Exception) {
+                                  result.success(false)
+                              }
+                          }
+                          "getBatteryInfo" -> {
+                              val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                              val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                              val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+                              val pct = if (level >= 0 && scale > 0) (level * 100 / scale) else 0
+                              val temp = (intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
+                              val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0
+                              val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                              val charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                              val tech = intent?.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY) ?: "Li-ion"
+                              val healthInt = intent?.getIntExtra(BatteryManager.EXTRA_HEALTH, -1) ?: -1
+                              val health = when (healthInt) {
+                                  BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
+                                  BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"
+                                  BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"
+                                  BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over Voltage"
+                                  else -> "Normal"
+                              }
+                              result.success(mapOf(
+                                  "level" to pct,
+                                  "temperature" to temp,
+                                  "voltage" to voltage,
+                                  "charging" to charging,
+                                  "technology" to tech,
+                                  "health" to health
+                              ))
+                          }
+                          "getDeviceInfo" -> {
+                              val actManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                              val memInfo = ActivityManager.MemoryInfo()
+                              actManager.getMemoryInfo(memInfo)
+                              val totalRamMb = memInfo.totalMem / (1024 * 1024)
+                              val availRamMb = memInfo.availMem / (1024 * 1024)
+                              result.success(mapOf(
+                                  "brand" to Build.BRAND,
+                                  "manufacturer" to Build.MANUFACTURER,
+                                  "model" to Build.MODEL,
+                                  "device" to Build.DEVICE,
+                                  "hardware" to Build.HARDWARE,
+                                  "board" to Build.BOARD,
+                                  "androidVersion" to Build.VERSION.RELEASE,
+                                  "sdkInt" to Build.VERSION.SDK_INT,
+                                  "abis" to Build.SUPPORTED_ABIS.joinToString(", "),
+                                  "totalRamMb" to totalRamMb,
+                                  "availRamMb" to availRamMb
+                              ))
+                          }
+                          "startMic" -> {
+                              if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                  ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 201)
+                                  result.error("PERM", "Microphone permission requested. Please tap Start again.", null)
+                                  return@setMethodCallHandler
+                              }
+                              try {
+                                  stopRecorder()
+                                  val outFile = File(cacheDir, "temp_mic.3gp")
+                                  val recorder = MediaRecorder()
+                                  recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+                                  recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+                                  recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+                                  recorder.setOutputFile(outFile.absolutePath)
+                                  recorder.prepare()
+                                  recorder.start()
+                                  mediaRecorder = recorder
+                                  result.success(true)
+                              } catch (e: Exception) {
+                                  result.error("MIC_ERR", e.message, null)
+                              }
+                          }
+                          "getMicDb" -> {
+                              try {
+                                  val amp = mediaRecorder?.maxAmplitude ?: 0
+                                  val db = if (amp > 0) 20 * log10(amp.toDouble()) else 25.0
+                                  result.success(db.coerceIn(20.0, 120.0))
+                              } catch (e: Exception) {
+                                  result.success(30.0)
+                              }
+                          }
+                          "stopMic" -> {
+                              stopRecorder()
+                              result.success(true)
+                          }
+                          "recognizeText" -> {
+                              val path = call.argument<String>("path") ?: ""
+                              try {
+                                  val file = File(path)
+                                  val image = InputImage.fromFilePath(this, Uri.fromFile(file))
+                                  val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                                  recognizer.process(image)
+                                      .addOnSuccessListener { visionText ->
+                                          result.success(visionText.text)
+                                      }
+                                      .addOnFailureListener { e ->
+                                          result.error("OCR_ERR", e.message, null)
+                                      }
+                              } catch (e: Exception) {
+                                  result.error("OCR_EX", e.message, null)
+                              }
+                          }
+                          "scanBarcodeFile" -> {
+                              val path = call.argument<String>("path") ?: ""
+                              try {
+                                  val file = File(path)
+                                  val image = InputImage.fromFilePath(this, Uri.fromFile(file))
+                                  val scanner = BarcodeScanning.getClient()
+                                  scanner.process(image)
+                                      .addOnSuccessListener { barcodes ->
+                                          val list = barcodes.mapNotNull { b ->
+                                              b.rawValue?.let { v ->
+                                                  mapOf("value" to v, "format" to b.format.toString())
+                                              }
+                                          }
+                                          result.success(list)
+                                      }
+                                      .addOnFailureListener { e ->
+                                          result.error("SCAN_ERR", e.message, null)
+                                      }
+                              } catch (e: Exception) {
+                                  result.error("SCAN_EX", e.message, null)
+                              }
+                          }
+                          "extractAudio" -> {
+                              val videoPath = call.argument<String>("videoPath") ?: ""
+                              val outPath = call.argument<String>("outPath") ?: ""
+                              Thread {
+                                  try {
+                                      val extractor = MediaExtractor()
+                                      extractor.setDataSource(videoPath)
+                                      var audioTrackIndex = -1
+                                      for (i in 0 until extractor.trackCount) {
+                                          val format = extractor.getTrackFormat(i)
+                                          val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                                          if (mime.startsWith("audio/")) {
+                                              audioTrackIndex = i
+                                              break
+                                          }
+                                      }
+                                      if (audioTrackIndex < 0) {
+                                          runOnUiThread { result.error("NO_AUDIO", "No audio track found in video", null) }
+                                          return@Thread
+                                      }
+                                      extractor.selectTrack(audioTrackIndex)
+                                      val format = extractor.getTrackFormat(audioTrackIndex)
+                                      val muxer = MediaMuxer(outPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                                      val dstIndex = muxer.addTrack(format)
+                                      muxer.start()
+                                      val buffer = ByteBuffer.allocate(512 * 1024)
+                                      val info = MediaCodec.BufferInfo()
+                                      while (true) {
+                                          val sampleSize = extractor.readSampleData(buffer, 0)
+                                          if (sampleSize < 0) break
+                                          info.offset = 0
+                                          info.size = sampleSize
+                                          info.presentationTimeUs = extractor.sampleTime
+                                          info.flags = extractor.sampleFlags
+                                          muxer.writeSampleData(dstIndex, buffer, info)
+                                          extractor.advance()
+                                      }
+                                      muxer.stop()
+                                      muxer.release()
+                                      extractor.release()
+                                      runOnUiThread { result.success(outPath) }
+                                  } catch (e: Exception) {
+                                      runOnUiThread { result.error("MUX_ERR", e.message, null) }
+                                  }
+                              }.start()
+                          }
+                          "pinHomeWidget" -> {
+                              val title = call.argument<String>("title") ?: "Omni Tool"
+                              try {
+                                  val mgr = AppWidgetManager.getInstance(this)
+                                  val ids = mgr.getAppWidgetIds(ComponentName(this, OmniWidgetProvider::class.java))
+                                  val updateIntent = Intent(this, OmniWidgetProvider::class.java).apply {
+                                      action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                                      putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+                                  }
+                                  sendBroadcast(updateIntent)
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                      val sm = getSystemService(ShortcutManager::class.java)
+                                      if (sm != null && sm.isRequestPinShortcutSupported) {
+                                          val launchIntent = Intent(this, MainActivity::class.java).apply {
+                                              action = Intent.ACTION_VIEW
+                                          }
+                                          val pinInfo = ShortcutInfo.Builder(this, "omni_${System.currentTimeMillis()}")
+                                              .setShortLabel(title)
+                                              .setLongLabel(title)
+                                              .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+                                              .setIntent(launchIntent)
+                                              .build()
+                                          sm.requestPinShortcut(pinInfo, null)
+                                      }
+                                  }
+                                  result.success(true)
+                              } catch (e: Exception) {
+                                  result.success(false)
+                              }
+                          }
+                          else -> result.notImplemented()
+                      }
+                  }
+              }
+
+              private fun stopRecorder() {
+                  try {
+                      mediaRecorder?.stop()
+                  } catch (_: Exception) {}
+                  try {
+                      mediaRecorder?.release()
+                  } catch (_: Exception) {}
+                  mediaRecorder = null
+              }
+          }
+          EOF
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Build Release APK
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omni-utility-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
