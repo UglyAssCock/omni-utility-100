@@ -158,7 +158,7 @@ class _ScannerToolScreenState extends State<ScannerToolScreen> {
               children: [
                 Expanded(
                   child: FilledButton.icon(
-                    icon: const Icon(Icons.Flip_to_front),
+                    icon: const Icon(Icons.flip_to_front),
                     label: Text(AppStrings.tr('Scan Front Side', 'مسح الوجه الأمامي')),
                     onPressed: () => _captureImage(fromCamera: true, idSide: 1),
                   ),
